@@ -1,0 +1,173 @@
+#+author: Nicola Ferru
+#+title: ox-epub3
+
+Un backend di esportazione Emacs per generare file EPUB 3.3 conformi alla specifica W3C direttamente da Org-mode.
+
+* Descrizione
+
+=ox-epub3= e' un pacchetto Emacs che converte file Org-mode in ebook EPUB 3.3 validi, con verifica di integrita' dello standard effettuata con [[https://github.com/w3c/epubcheck][epubcheck]]. Il progetto nasce come riscrittura ex-novo di =ox-epub=, che non seguiva gli ultimi standard EPUB e il cui fork risultava piu' complesso da mantenere che riscriverlo.
+
+* Caratteristiche
+
+- Esportazione a EPUB 3.3 conforme alla specifica W3C
+- Validazione con =epubcheck=
+- Supporto copertine tramite keyword dedicata
+- Generazione automatica di XHTML5 per ogni headline/sezione
+- Generazione del navigation document (toc.xhtml) e NCX (toc.ncx) per retrocompatibilita' EPUB 2
+- Package document (content.opf) con metadata Dublin Core completi
+- Metadata di accessibilita' (EPUB Accessibility 1.1)
+- Generazione UUID v4 per identificatore univoco
+- CSS predefinito con design pulito e leggibile
+- Supporto immagini inline (JPG, PNG, GIF, SVG, WebP)
+- Compressione ZIP conforme: mimetype non compresso come primo file
+- Compatibilita' con lettori Kindle e Kobo
+
+* Requisiti
+
+- Emacs >= 25.1
+- Org-mode >= 9.0
+- Comando =zip= disponibile nel PATH
+
+* Installazione
+
+** Manualmente
+
+Clona il repository e carica i file:
+
+#+begin_src emacs-lisp
+(add-to-list 'load-path "/percorso/a/ox-epub3")
+(require 'ox-epub3)
+#+end_src
+
+** Con use-package
+
+#+begin_src emacs-lisp
+(use-package ox-epub3
+  :load-path "/percorso/a/ox-epub3"
+  :config
+  (setq org-epub3-default-language "it"))
+#+end_src
+
+* Utilizzo
+
+** Comandi interattivi
+
+| Comando                                      | Descrizione                          | Binding di default |
+|----------------------------------------------+--------------------------------------+--------------------|
+| =M-x org-epub3-export-as-epub=               | Esporta il buffer corrente a EPUB    | =C-c C-e E e=      |
+| =M-x org-epub3-export-to-epub-and-open=      | Esporta e apri nel lettore predef.   | =C-c C-e E o=      |
+
+** Da Org-mode
+
+Dentro un file Org, lanciare l'esportazione con:
+
+: C-c C-e E e
+
+** Esempio minimo
+
+#+begin_src org
+,#+TITLE: Il Mio Ebook
+,#+AUTHOR: Mario Rossi
+,#+LANGUAGE: it
+
+,* Capitolo 1
+Contenuto del primo capitolo.
+
+,* Capitolo 2
+Contenuto del secondo capitolo.
+#+end_src
+
+* Configurazione
+
+** Variabili di customization
+
+Tutte le variabili sono raggruppate nel gruppo =ox-epub3= e possono essere configurate con =M-x customize-group RET ox-epub3=.
+
+| Variabile                          | Tipo     | Default      | Descrizione                                        |
+|------------------------------------+----------+--------------+----------------------------------------------------|
+| =org-epub3-zip-command=            | string   | ="zip"=      | Comando per creare archivi ZIP                     |
+| =org-epub3-default-language=       | string   | ="it"=       | Lingua predefinita (BCP 47)                        |
+| =org-epub3-page-progression=       | choice   | ="ltr"=      | Direzione di lettura: =ltr=, =rtl=, =default=      |
+| =org-epub3-toc-depth=              | integer  | =3=          | Profondita' massima della tabella dei contenuti     |
+| =org-epub3-layout=                 | choice   | ="reflowable="| Layout: =reflowable= o =pre-paginated=             |
+| =org-epub3-identifier-prefix=      | string   | ="urn:uuid:"=| Prefisso per l'identificatore univoco              |
+| =org-epub3-use-ncx=                | boolean  | =t=          | Includi NCX per retrocompatibilita' EPUB 2          |
+| =org-epub3-accessibility-summary=  | string   | (testo default)| Riepilogo accessibilita'                          |
+| =org-epub3-cover-image=            | file/nil | =nil=        | Percorso file immagine di copertina                 |
+
+** Esempio di configurazione
+
+#+begin_src emacs-lisp
+(setq org-epub3-default-language "en")
+(setq org-epub3-page-progression "ltr")
+(setq org-epub3-toc-depth 3)
+(setq org-epub3-layout "reflowable")
+(setq org-epub3-use-ncx t)
+(setq org-epub3-cover-image "/percorso/a/cover.jpg")
+#+end_src
+
+** Keyword Org-mode
+
+Le seguenti keyword possono essere usate direttamente nel file Org per sovrascrivere le impostazioni:
+
+| Keyword                       | Descrizione                             |
+|-------------------------------+-----------------------------------------|
+| =#+EPUB3_COVER_IMAGE:=        | Percorso immagine di copertina          |
+| =#+EPUB3_STYLE:=              | File CSS aggiuntivi                     |
+| =#+EPUB3_LAYOUT:=             | Tipo layout (reflowable/pre-paginated)  |
+| =#+EPUB3_TOC_DEPTH:=          | Profondita' massima del TOC             |
+| =#+EPUB3_PAGE_PROGRESSION:=   | Direzione lettura (ltr/rtl/default)     |
+
+Esempio:
+
+#+begin_src org
+,#+TITLE: Il Mio Ebook
+,#+EPUB3_COVER_IMAGE: ./cover.jpg
+,#+EPUB3_LAYOUT: reflowable
+,#+EPUB3_TOC_DEPTH: 2
+#+end_src
+
+* Struttura del file EPUB generato
+
+Il file EPUB generato segue la struttura richiesta dalla specifica W3C:
+
+: libro.epub (ZIP)
+: +-- mimetype                          # OBBLIGATORIO - primo file, non compresso
+: +-- META-INF/
+: |   +-- container.xml                 # OBBLIGATORIO - punta al package document
+: +-- OEBPS/
+:     +-- content.opf                  # OBBLIGATORIO - package document
+:     +-- toc.xhtml                    # OBBLIGATORIO - navigation document
+:     +-- toc.ncx                      # OPZIONALE - retrocompatibilita' EPUB 2
+:     +-- EPUB/
+:         +-- text/
+:         |   +-- cover.xhtml          # Pagina copertina
+:         |   +-- titlepage.xhtml      # Pagina del titolo
+:         |   +-- ch001.xhtml          # Capitoli generati
+:         |   +-- ...
+:         +-- images/
+:         |   +-- cover.jpg
+:         |   +-- ...
+:         +-- styles/
+:             +-- style.css
+
+* Struttura del codice
+
+Il pacchetto e' composto da due file:
+
+- =ox-epub3.el=: Backend di esportazione principale
+- =ox-epub3-pkg.el=: Definizione del pacchetto per MELPA/Emacs package manager
+
+Il backend e' derivato da =html= e sfrutta =ox-html= per la conversione del contenuto Org in XHTML.
+
+* Esempio completo
+
+Vedi =test-ebook.org= per un esempio funzionante con copertina, sezioni multipli, elenchi, citazioni e codice.
+
+* Licenza
+
+GPL-3.0 o posteriore. Vedi il file sorgente per i dettagli.
+
+* Contatti
+
+Autore: Nicola Ferru aka NFVblog
