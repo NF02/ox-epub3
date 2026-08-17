@@ -1,8 +1,8 @@
 ;;; ox-epub3.el --- Export Org-mode to EPUB 3.3 -*- lexical-binding: t; -*-
 
-;; Copyright (C) 2026 Nick
+;; Copyright (C) 2026 Nicola Ferru Aka NFVblog
 
-;; Author: Nick
+;; Author: Nicola Ferru Aka NFVblog
 ;; Version: 0.1.0
 ;; Package-Requires: ((emacs "25.1") (org "9.0"))
 ;; Keywords: epub, org-mode, export, ebook
@@ -221,8 +221,12 @@
    ".title-page { text-align: center; margin-top: 25vh; }\n"
    ".title-page h1 { font-size: 2.5em; }\n"
    ".title-page .author { font-size: 1.3em; color: #666; margin-top: 0.5em; }\n"
+   ".title-page .email { font-size: 1em; color: #888; }\n"
    ".cover { text-align: center; }\n"
-   ".cover img { max-width: 100%; max-height: 80vh; }\n"))
+   ".cover img { max-width: 100%; max-height: 60vh; }\n"
+   ".cover h1 { font-size: 2em; margin: 0.5em 0 0.3em; }\n"
+   ".cover .author { font-size: 1.3em; color: #666; margin-bottom: 0.2em; }\n"
+   ".cover .email { font-size: 1em; color: #888; }\n"))
 
 ;;; --- EPUB Structure Generation ---
 
@@ -372,7 +376,7 @@
         "  <item id=\"ncx\" href=\"toc.ncx\" media-type=\"application/x-dtbncx+xml\"/>\n")
       "  <item id=\"style\" href=\"EPUB/styles/style.css\" media-type=\"text/css\"/>\n"
       (when (and cover
-                 (file-exists-p (concat temp-dir "/OEBPS/EPUB/images/"
+                 (file-exists-p (concat temp-dir "/EPUB/images/"
                                         (file-name-nondirectory cover))))
         (concat "  <item id=\"cover-image\" href=\"EPUB/images/"
                 (org-epub3--esc (file-name-nondirectory cover))
@@ -459,11 +463,14 @@
     (unwind-protect
         (let* (          (info (org-export-get-environment 'epub3))
                (raw-title (plist-get info :title))
-               (title (if (and raw-title (stringp raw-title))
+               (title (if raw-title
                           (org-epub3--to-string raw-title) "Untitled"))
                (raw-author (plist-get info :author))
-               (author (when (and raw-author (stringp raw-author))
+               (author (when raw-author
                          (org-epub3--to-string raw-author)))
+               (raw-email (plist-get info :email))
+               (email (when (and raw-email (stringp raw-email))
+                        (org-epub3--to-string raw-email)))
                (cover (plist-get info :epub3-cover-image))
                (tree (org-element-parse-buffer))
                (oebps (concat temp-dir "/OEBPS"))
@@ -490,6 +497,7 @@
           ;; Cover
           (when (and cover (file-exists-p cover))
             (let ((fname (file-name-nondirectory cover)))
+              (make-directory img t)
               (copy-file cover (concat img "/" fname) t)
               (org-epub3--write-file
                (concat text "/cover.xhtml")
@@ -498,11 +506,18 @@
                 (concat "<div class=\"cover\">\n"
                         "  <img src=\"../images/" (org-epub3--esc fname)
                         "\" alt=\"Copertina\"/>\n"
+                        "  <h1>" (org-epub3--esc title) "</h1>\n"
+                        (when author
+                          (concat "  <div class=\"author\">"
+                                  (org-epub3--esc author) "</div>\n"))
+                        (when email
+                          (concat "  <div class=\"email\">"
+                                  (org-epub3--esc email) "</div>\n"))
                         "</div>\n")))
               (push (list :id "cover" :href "EPUB/text/cover.xhtml"
                           :type "application/xhtml+xml")
                     org-epub3--manifest-items)
-              (push (list :idref "cover" :linear "no")
+              (push (list :idref "cover" :linear "yes")
                     org-epub3--spine-items)))
 
           ;; Title page
@@ -515,6 +530,9 @@
                     (when author
                       (concat "  <div class=\"author\">"
                               (org-epub3--esc author) "</div>\n"))
+                    (when email
+                      (concat "  <div class=\"email\">"
+                              (org-epub3--esc email) "</div>\n"))
                     "</div>\n")))
           (push (list :id "titlepage" :href "EPUB/text/titlepage.xhtml"
                       :type "application/xhtml+xml")
@@ -534,12 +552,13 @@
                      (ch-href (concat "EPUB/text/" ch-file))
                      (ch-title (org-epub3--to-string
                                 (org-element-property :raw-value hl)))
-                     (ch-begin (org-element-property :contents-begin hl))
-                     (ch-end (org-element-property :end hl))
-                     (ch-raw (with-current-buffer buf
-                               (buffer-substring-no-properties ch-begin ch-end)))
-                     (ch-html (org-export-string-as
-                               ch-raw 'html t
+                      (ch-begin (org-element-property :contents-begin hl))
+                      (ch-end (org-element-property :contents-end hl))
+                      (ch-raw (when (and ch-begin ch-end)
+                                (with-current-buffer buf
+                                  (buffer-substring-no-properties ch-begin ch-end))))
+                      (ch-html (org-export-string-as
+                                (or ch-raw "") 'html t
                                '(:html-doctype "html5"
                                  :html-preamble nil
                                  :html-postamble nil
@@ -621,7 +640,7 @@
 ;;; --- Interactive ---
 
 ;;;###autoload
-(defun org-epub3-export-as-epub ()
+(defun org-epub3-export-as-epub (&optional _async _subtreep _visible-only _body-only)
   "Export current Org buffer to an EPUB 3.3 file."
   (interactive)
   (let ((epub-file (concat (file-name-sans-extension
@@ -632,7 +651,7 @@
       (dired-jump nil epub-file))))
 
 ;;;###autoload
-(defun org-epub3-export-to-epub-and-open ()
+(defun org-epub3-export-to-epub-and-open (&optional _async _subtreep _visible-only _body-only)
   "Export current Org buffer to EPUB and open in default reader."
   (interactive)
   (let ((epub-file (concat (file-name-sans-extension
