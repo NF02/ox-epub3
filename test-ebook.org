@@ -1,0 +1,55 @@
+#+TITLE: Il Mio Primo Ebook
+#+AUTHOR: Mario Rossi
+#+LANGUAGE: it
+#+DESCRIPTION: Un esempio di ebook esportato da Org-mode a EPUB 3.3
+#+DATE: 2026-08-16
+#+EPUB3_COVER_IMAGE: ./cover.jpg
+#+EPUB3_PAGE_PROGRESSION: ltr
+
+* Introduzione
+
+Questo è il primo capitolo del nostro ebook.  Org-mode permette di
+scrivere documenti in un formato semplice e leggibile, che può essere
+trasformato in molti formati diversi.
+
+** Sottosezione
+
+Ecco una sottosezione del primo capitolo.  La gerarchia dei titoli
+viene preservata nella navigazione.
+
+* Secondo Capitolo
+
+Il secondo capitolo contiene più elementi strutturati.
+
+*** Lista Puntata
+
+- Primo elemento
+- Secondo elemento
+- Terzo elemento
+
+*** Lista Numerata
+
+1. Primo passo
+2. Secondo passo
+3. Terzo passo
+
+*** Citazione
+
+#+begin_quote
+La conoscenza è potere.  La conoscenza è anche responsabilità.
+-- Francis Bacon
+#+end_quote
+
+*** Codice
+
+#+begin_src emacs-lisp
+(defun saluta (nome)
+  "Saluta qualcuno."
+  (message "Ciao, %s!" nome))
+#+end_src
+
+* Conclusione
+
+Questo ebook dimostra come sia possibile creare documenti EPUB 3.3
+validi direttamente da Org-mode, mantenendo una struttura chiara e
+un formato di scrittura comodo.

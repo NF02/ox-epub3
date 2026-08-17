@@ -42,6 +42,11 @@
 (require 'seq)
 (require 'cl-lib)
 
+(require 'ox-epub3-kernel)
+(require 'ox-epub3-struct)
+(require 'ox-epub3-latex)
+(require 'ox-epub3-style)
+
 ;;; --- Customization ---
 
 (defgroup ox-epub3 nil
@@ -95,496 +100,48 @@
   :type '(choice (const nil) file)
   :group 'ox-epub3)
 
-;;; --- Internal Variables ---
+;;; --- Image Handling ---
 
-(defvar org-epub3--uuid nil
-  "Generated UUID for current export.")
-(defvar org-epub3--chapter-counter 0
-  "Chapter counter for current export.")
-(defvar org-epub3--manifest-items nil
-  "Manifest items accumulated during export.")
-(defvar org-epub3--spine-items nil
-  "Spine items accumulated during export.")
-(defvar org-epub3--nav-items nil
-  "Navigation items for toc.xhtml.")
-(defvar org-epub3--ncx-points nil
-  "NCX navigation points.")
-(defvar org-epub3--chapters nil
-  "List of generated chapter plists.")
-(defvar org-epub3--images nil
-  "Image files to copy into EPUB.")
+(defun org-epub3--collect-images (tree)
+  "Collect all image file paths referenced in TREE.
+Returns a list of absolute file paths."
+  (let ((images nil))
+    (org-element-map tree 'link
+      (lambda (link)
+        (when (equal (org-element-property :type link) "file")
+          (let ((path (org-element-property :path link)))
+            (when (and path
+                       (string-match-p "\\`\\.?\\.?/\\|^[^:]+\\.[a-z]+\\'" path)
+                       (file-exists-p path)
+                       (string-match-p
+                        "\\`\\(jpg\\|jpeg\\|png\\|gif\\|svg\\|webp\\)\\'"
+                        (downcase (file-name-extension path))))
+              (push path images))))))
+    (nreverse images)))
 
-;;; --- Helpers ---
+(defun org-epub3--register-image (img-file img-dir manifest)
+  "Register IMG-FILE in MANIFEST, copying it to IMG-DIR if needed.
+Returns updated MANIFEST."
+  (let* ((fname (file-name-nondirectory img-file))
+         (ext (file-name-extension fname))
+         (id (concat "img-" (replace-regexp-in-string "[^a-zA-Z0-9]" "-" fname)))
+         (href (concat "EPUB/images/" fname))
+         (mime (org-epub3--mime ext)))
+    (when (file-exists-p img-file)
+      (make-directory img-dir t)
+      (copy-file img-file (concat img-dir "/" fname) t))
+    (cons (list :id id :href href :type mime) manifest)))
 
-(defun org-epub3--uuid ()
-  "Generate a UUID v4."
-  (format "%04x%04x-%04x-%04x-%04x-%04x%04x%04x"
-          (random 65536) (random 65536)
-          (random 65536)
-          (+ 16384 (random 16384))
-          (+ 32768 (random 16384))
-          (random 65536) (random 65536) (random 65536)))
+;;; --- Chapter Extraction ---
 
-(defun org-epub3--iso-now ()
-  "Return current time as ISO 8601 UTC."
-  (format-time-string "%Y-%m-%dT%H:%M:%SZ" (current-time) t))
-
-(defun org-epub3--to-string (data)
-  "Convert DATA to a plain string, stripping text properties."
-  (cond
-   ((stringp data) (substring-no-properties data))
-   ((symbolp data) (symbol-name data))
-   ((numberp data) (number-to-string data))
-   ((null data) "")
-   ((listp data) (org-epub3--to-string (car data)))
-   (t (substring-no-properties (format "%s" data)))))
-
-(defun org-epub3--esc (text)
-  "Escape TEXT for XML."
-  (let ((s (org-epub3--to-string text)))
-    (when (and s (not (string-empty-p s)))
-      (setq s (replace-regexp-in-string "&" "&amp;" s))
-      (setq s (replace-regexp-in-string "<" "&lt;" s))
-      (setq s (replace-regexp-in-string ">" "&gt;" s))
-      (setq s (replace-regexp-in-string "\"" "&quot;" s))
-      s)))
-
-(defun org-epub3--mime (ext)
-  "Return MIME type for EXT."
-  (pcase (downcase ext)
-    ((or "jpg" "jpeg") "image/jpeg")
-    ("png" "image/png")
-    ("gif" "image/gif")
-    ("svg" "image/svg+xml")
-    ("webp" "image/webp")
-    ("ttf" "font/ttf")
-    ("otf" "font/otf")
-    ("woff" "font/woff")
-    ("woff2" "font/woff2")
-    ("css" "text/css")
-    ((or "xhtml" "html" "htm") "application/xhtml+xml")
-    (_ "application/octet-stream")))
-
-;;; --- LaTeX / SVG (dvisvgm) ---
-
-(defvar org-epub3--has-svg nil
-  "Non-nil when current export contains inline SVG content.")
-
-(defun org-epub3--dvisvgm-available-p ()
-  "Return non-nil if dvisvgm and latex are available in PATH."
-  (and (executable-find "dvisvgm") (executable-find "latex")))
-
-(defun org-epub3--latex-to-svg (latex-str &optional displayp)
-  "Convert LATEX-STR to an SVG string using dvisvgm.
-When DISPLAYP is non-nil, use display-math mode.
-Returns SVG string or nil on failure."
-  (when (org-epub3--dvisvgm-available-p)
-    (let ((tex-file (make-temp-file "ox-epub3-math-" nil ".tex"))
-          (svg-file nil))
-      (unwind-protect
-          (progn
-            (with-temp-file tex-file
-              (insert
-               "\\documentclass{article}\n"
-               "\\usepackage{amsmath,amssymb}\n"
-               "\\usepackage[active,tightpage]{preview}\n"
-               "\\begin{document}\n"
-               "\\begin{preview}\n"
-               (if displayp
-                   (concat "\\[" latex-str "\\]")
-                 (concat "$" latex-str "$"))
-               "\n\\end{preview}\n"
-               "\\end{document}\n"))
-            (call-process "latex" nil nil nil
-                          "-interaction=nonstopmode"
-                          "-output-directory"
-                          (file-name-directory tex-file)
-                          tex-file)
-            (let* ((base (file-name-sans-extension tex-file))
-                   (dvi-file (concat base ".dvi")))
-              (when (file-exists-p dvi-file)
-                (setq svg-file (concat base ".svg"))
-                (call-process "dvisvgm" nil nil nil
-                              "--no-fonts"
-                              "--exact-bbox"
-                              "-o" svg-file
-                              dvi-file)
-                (when (and svg-file (file-exists-p svg-file))
-                  (with-temp-buffer
-                    (insert-file-contents svg-file)
-                    (let ((svg (buffer-string))
-                          (prefix (format "m%d-" (abs (sxhash latex-str)))))
-                      ;; Strip XML declaration for inline embedding in XHTML
-                      (when (string-match "\\`<\\?xml[^?]*\\?>\n?" svg)
-                        (setq svg (replace-match "" t t svg)))
-                      ;; Strip dvisvgm comment
-                      (when (string-match "<!-- This file was generated by dvisvgm[^>]* -->\n?" svg)
-                        (setq svg (replace-match "" t t svg)))
-                      ;; Ensure SVG has proper xmlns for XHTML (double quotes)
-                      (when (string-match "<svg " svg)
-                        (setq svg
-                              (replace-regexp-in-string
-                               "xmlns='http://www.w3.org/2000/svg'"
-                               "xmlns=\"http://www.w3.org/2000/svg\""
-                               svg nil t))
-                        (setq svg
-                              (replace-regexp-in-string
-                               "xmlns:xlink='http://www.w3.org/1999/xlink'"
-                               "xmlns:xlink=\"http://www.w3.org/1999/xlink\""
-                               svg nil t)))
-                      ;; Make IDs unique to avoid conflicts in same document
-                      ;; Prefix all id= and xlink:href= references
-                      (let ((pfx prefix))
-                        (setq svg (replace-regexp-in-string
-                                    "id='\\([^']*\\)'"
-                                    (lambda (m)
-                                      (concat "id='" pfx (match-string 1 m) "'"))
-                                    svg nil t))
-                        (setq svg (replace-regexp-in-string
-                                    "xlink:href='#\\([^']*\\)'"
-                                    (lambda (m)
-                                      (concat "xlink:href='#" pfx (match-string 1 m) "'"))
-                                    svg nil t)))
-                      svg))))))
-        ;; Cleanup temp files
-        (when (file-exists-p tex-file)
-          (delete-file tex-file))
-        (let ((base (file-name-sans-extension tex-file)))
-          (dolist (ext '(".log" ".aux" ".dvi" ".pdf" ".svg"))
-            (when (file-exists-p (concat base ext))
-              (delete-file (concat base ext)))))))))
-
-(defun org-epub3--latex-fragment (latex-fragment _contents _info)
-  "Transcode LATEX-FRAGMENT to inline SVG via dvisvgm.
-CONTENTS is nil.  INFO is the export plist."
-  (let* ((latex-str (org-element-property :value latex-fragment))
-         (svg (org-epub3--latex-to-svg latex-str nil)))
-    (if svg
-        (progn
-          (setq org-epub3--has-svg t)
-          (concat "<span class=\"math\">"
-                  svg
-                  "</span>"))
-      (concat "<code class=\"latex-fragment\">"
-              (org-epub3--esc latex-str)
-              "</code>"))))
-
-(defun org-epub3--latex-environment (latex-environment _contents _info)
-  "Transcode LATEX-ENVIRONMENT to SVG via dvisvgm.
-CONTENTS is nil.  INFO is the export plist."
-  (let* ((latex-str (org-remove-indentation
-                     (org-element-property :value latex-environment)))
-         (svg (org-epub3--latex-to-svg latex-str t)))
-    (if svg
-        (progn
-          (setq org-epub3--has-svg t)
-          (concat "<div class=\"equation\">\n"
-                  svg
-                  "\n</div>"))
-      (concat "<pre class=\"latex-environment\">"
-              (org-epub3--esc latex-str)
-              "</pre>"))))
-
-;;; --- XHTML Wrapper ---
-
-(defun org-epub3--xhtml (title body &optional lang css-path)
-  "Wrap BODY in XHTML5 document with TITLE, LANG and CSS-PATH."
-  (let ((lang (or lang org-epub3-default-language))
-        (css-path (or css-path "../styles/style.css")))
-    (concat
-     "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n"
-     "<!DOCTYPE html>\n"
-     "<html xmlns=\"http://www.w3.org/1999/xhtml\"\n"
-     "      xmlns:epub=\"http://www.idpf.org/2007/ops\"\n"
-     "      xml:lang=\"" (org-epub3--esc lang) "\">\n"
-     "<head>\n"
-     "  <title>" (org-epub3--esc (or title "")) "</title>\n"
-     "  <link rel=\"stylesheet\" type=\"text/css\" href=\"" css-path "\"/>\n"
-     "</head>\n"
-     "<body>\n"
-     body
-     "</body>\n"
-     "</html>\n")))
-
-;;; --- Default CSS ---
-
-(defun org-epub3--default-css ()
-  "Default CSS for EPUB content."
-  (concat
-   "body {\n"
-   "  font-family: Georgia, \"Times New Roman\", serif;\n"
-   "  line-height: 1.6;\n"
-   "  margin: 1em;\n"
-   "  color: #333;\n"
-   "}\n"
-   "h1 { font-size: 1.8em; margin: 1.5em 0 0.8em; }\n"
-   "h2 { font-size: 1.5em; margin: 1.3em 0 0.7em; }\n"
-   "h3 { font-size: 1.3em; margin: 1.2em 0 0.6em; }\n"
-   "p { margin: 0.8em 0; text-align: justify; }\n"
-   "img { max-width: 100%; height: auto; }\n"
-   "blockquote {\n"
-   "  margin: 1em 2em;\n"
-   "  padding: 0.5em 1em;\n"
-   "  border-left: 3px solid #ccc;\n"
-   "  font-style: italic;\n"
-   "  color: #555;\n"
-   "}\n"
-   "pre, code {\n"
-   "  font-family: monospace;\n"
-   "  background: #f5f5f5;\n"
-   "}\n"
-   "pre {\n"
-   "  padding: 1em;\n"
-   "  overflow-x: auto;\n"
-   "  white-space: pre-wrap;\n"
-   "  word-wrap: break-word;\n"
-   "}\n"
-   "code { padding: 0.1em 0.3em; border-radius: 2px; }\n"
-   "table { border-collapse: collapse; width: 100%%; margin: 1em 0; }\n"
-   "th, td { border: 1px solid #ddd; padding: 0.5em; text-align: left; }\n"
-   "th { background: #f0f0f0; font-weight: bold; }\n"
-   "ul, ol { margin: 0.8em 0; padding-left: 2em; }\n"
-   "li { margin: 0.3em 0; }\n"
-   "a { color: #0066cc; text-decoration: none; }\n"
-   ".title-page { text-align: center; margin-top: 25vh; }\n"
-   ".title-page h1 { font-size: 2.5em; }\n"
-   ".title-page .author { font-size: 1.3em; color: #666; margin-top: 0.5em; }\n"
-   ".title-page .email { font-size: 1em; color: #888; }\n"
-   ".cover { text-align: center; }\n"
-   ".cover img { max-width: 100%; max-height: 60vh; }\n"
-   ".cover h1 { font-size: 2em; margin: 0.5em 0 0.3em; }\n"
-   ".cover .author { font-size: 1.3em; color: #666; margin-bottom: 0.2em; }\n"
-   ".cover .email { font-size: 1em; color: #888; }\n"
-   ".math { display: inline; vertical-align: middle; }\n"
-   ".math svg { display: inline; vertical-align: middle; }\n"
-   ".equation { text-align: center; margin: 1em 0; }\n"
-   ".equation svg { display: block; margin: 0 auto; }\n"
-   ".latex-fragment, .latex-environment {\n"
-   "  font-family: monospace;\n"
-   "  background: #f5f5f5;\n"
-   "  padding: 0.2em 0.4em;\n"
-   "  border-radius: 3px;\n"
-   "  font-style: italic;\n"
-   "}\n"))
-
-;;; --- EPUB Structure Generation ---
-
-(defun org-epub3--write-file (path content)
-  "Write CONTENT to PATH."
-  (with-temp-file path (insert content)))
-
-(defun org-epub3--generate-mimetype (temp-dir)
-  "Generate mimetype file in TEMP-DIR."
-  (org-epub3--write-file (concat temp-dir "/mimetype") "application/epub+zip"))
-
-(defun org-epub3--generate-container (temp-dir)
-  "Generate META-INF/container.xml in TEMP-DIR."
-  (let ((meta (concat temp-dir "/META-INF")))
-    (make-directory meta t)
-    (org-epub3--write-file
-     (concat meta "/container.xml")
-     (concat "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n"
-             "<container version=\"1.0\"\n"
-             "           xmlns=\"urn:oasis:names:tc:opendocument:xmlns:container\">\n"
-             "  <rootfiles>\n"
-             "    <rootfile full-path=\"OEBPS/content.opf\"\n"
-             "              media-type=\"application/oebps-package+xml\"/>\n"
-             "  </rootfiles>\n"
-             "</container>\n"))))
-
-(defun org-epub3--generate-nav (temp-dir info)
-  "Generate toc.xhtml navigation document in TEMP-DIR using INFO."
-  (let* ((title (or (plist-get info :title) "Indice"))
-         (lang (or (plist-get info :language) org-epub3-default-language))
-         (nav-items (nreverse org-epub3--nav-items)))
-    (org-epub3--write-file
-     (concat temp-dir "/toc.xhtml")
-     (org-epub3--xhtml
-      (concat (org-epub3--esc title) " - Indice")
-      (concat
-       "  <nav id=\"toc\" epub:type=\"toc\">\n"
-       "    <h1>" (org-epub3--esc title) "</h1>\n"
-       "    <ol>\n"
-       (mapconcat
-        (lambda (item)
-          (let ((label (plist-get item :label))
-                (href (plist-get item :href))
-                (children (plist-get item :children)))
-            (concat
-             "      <li><a href=\"" (org-epub3--esc href) "\">"
-             (org-epub3--esc label) "</a>"
-             (when children
-               (concat "\n        <ol>\n"
-                       (mapconcat
-                        (lambda (c)
-                          (concat "          <li><a href=\""
-                                  (org-epub3--esc (plist-get c :href))
-                                  "\">" (org-epub3--esc (plist-get c :label))
-                                  "</a></li>"))
-                        children "\n")
-                       "\n        </ol>"))
-             "</li>")))
-        nav-items "\n")
-       "\n    </ol>\n"
-       "  </nav>\n")
-      lang "EPUB/styles/style.css"))))
-
-(defun org-epub3--generate-ncx (temp-dir info)
-  "Generate toc.ncx in TEMP-DIR using INFO."
-  (let ((title (or (plist-get info :title) ""))
-        (points (nreverse org-epub3--ncx-points)))
-    (org-epub3--write-file
-     (concat temp-dir "/toc.ncx")
-     (concat "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n"
-             "<!DOCTYPE ncx PUBLIC \"-//NISO//DTD ncx 2005-1//EN\"\n"
-             "  \"http://www.daisy.org/z3986/2005/ncx-2005-1.dtd\">\n"
-              "<ncx xmlns=\"http://www.daisy.org/z3986/2005/ncx/\" version=\"2005-1\">\n"
-             "<head>\n"
-             "  <meta name=\"dtb:uid\" content=\""
-             (org-epub3--esc org-epub3--uuid) "\"/>\n"
-             "  <meta name=\"dtb:depth\" content=\""
-             (number-to-string org-epub3-toc-depth) "\"/>\n"
-             "  <meta name=\"dtb:totalPageCount\" content=\"0\"/>\n"
-             "  <meta name=\"dtb:maxPageNumber\" content=\"0\"/>\n"
-             "</head>\n"
-             "<docTitle><text>" (org-epub3--esc title) "</text></docTitle>\n"
-             "<navMap>\n"
-             (mapconcat
-              (lambda (p)
-                (concat "  <navPoint id=\"" (plist-get p :id) "\">\n"
-                        "    <navLabel><text>"
-                        (org-epub3--esc (plist-get p :label))
-                        "</text></navLabel>\n"
-                         "    <content src=\""
-                         (org-epub3--esc
-                          (concat "EPUB/text/" (plist-get p :href)))
-                         "\"/>\n"
-                        "  </navPoint>"))
-              points "\n")
-             "\n</navMap>\n"
-             "</ncx>\n"))))
-
-(defun org-epub3--generate-opf (temp-dir info)
-  "Generate content.opf in TEMP-DIR using INFO."
-  (let* ((title (or (plist-get info :title) "Untitled"))
-         (author (plist-get info :author))
-         (lang (or (plist-get info :language) org-epub3-default-language))
-         (date (or (plist-get info :date)
-                   (format-time-string "%Y-%m-%d" (current-time) t)))
-         (description (plist-get info :description))
-         (cover (plist-get info :epub3-cover-image))
-         (manifest (nreverse org-epub3--manifest-items))
-         (spine (nreverse org-epub3--spine-items)))
-    (org-epub3--write-file
-     (concat temp-dir "/content.opf")
-     (concat
-      "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n"
-      "<package xmlns=\"http://www.idpf.org/2007/opf\"\n"
-      "         xmlns:dc=\"http://purl.org/dc/elements/1.1/\"\n"
-      "         unique-identifier=\"pub-id\"\n"
-      "         version=\"3.0\">\n\n"
-      "<metadata>\n"
-      "  <dc:identifier id=\"pub-id\">" (org-epub3--esc org-epub3--uuid) "</dc:identifier>\n"
-      "  <dc:title id=\"t1\">" (org-epub3--esc title) "</dc:title>\n"
-      "  <dc:language>" (org-epub3--esc lang) "</dc:language>\n"
-      "  <dc:date>" (org-epub3--esc date) "</dc:date>\n"
-      (when author
-        (concat "  <dc:creator id=\"creator1\">"
-                (org-epub3--esc author) "</dc:creator>\n"))
-      (when description
-        (concat "  <dc:description>"
-                (org-epub3--esc description) "</dc:description>\n"))
-      "  <meta property=\"dcterms:modified\">"
-      (org-epub3--iso-now) "</meta>\n"
-      "  <meta refines=\"#t1\" property=\"title-type\">main</meta>\n"
-      (when author
-        "  <meta refines=\"#creator1\" property=\"role\" scheme=\"marc:relators\">aut</meta>\n")
-      "  <meta property=\"schema:accessMode\">textual</meta>\n"
-      "  <meta property=\"schema:accessModeSufficient\">textual</meta>\n"
-      "  <meta property=\"schema:accessFeature\">alternativeText</meta>\n"
-      "  <meta property=\"schema:accessFeature\">readingOrder</meta>\n"
-      "  <meta property=\"schema:accessHazard\">none</meta>\n"
-      "  <meta property=\"schema:accessibilitySummary\">"
-      (org-epub3--esc org-epub3-accessibility-summary) "</meta>\n"
-      "  <meta property=\"rendition:layout\">"
-      (org-epub3--esc org-epub3-layout) "</meta>\n"
-      "</metadata>\n\n"
-      "<manifest>\n"
-      "  <item id=\"nav\" href=\"toc.xhtml\" media-type=\"application/xhtml+xml\" properties=\"nav\"/>\n"
-      (when org-epub3-use-ncx
-        "  <item id=\"ncx\" href=\"toc.ncx\" media-type=\"application/x-dtbncx+xml\"/>\n")
-      "  <item id=\"style\" href=\"EPUB/styles/style.css\" media-type=\"text/css\"/>\n"
-      (when (and cover
-                 (file-exists-p (concat temp-dir "/EPUB/images/"
-                                        (file-name-nondirectory cover))))
-        (concat "  <item id=\"cover-image\" href=\"EPUB/images/"
-                (org-epub3--esc (file-name-nondirectory cover))
-                "\" media-type=\"" (org-epub3--mime (file-name-extension cover))
-                "\" properties=\"cover-image\"/>\n"))
-      (mapconcat
-       (lambda (item)
-         (concat "  <item id=\"" (plist-get item :id) "\" href=\""
-                 (org-epub3--esc (plist-get item :href))
-                 "\" media-type=\"" (org-epub3--esc (plist-get item :type))
-                 "\""
-                 (when (plist-get item :props)
-                   (concat " properties=\"" (org-epub3--esc (plist-get item :props)) "\""))
-                 "/>"))
-       manifest "\n")
-      "\n</manifest>\n\n"
-      "<spine"
-      (when org-epub3-use-ncx " toc=\"ncx\"")
-      (concat " page-progression-direction=\""
-              (org-epub3--esc org-epub3-page-progression) "\"")
-      ">\n"
-      (mapconcat
-       (lambda (s)
-         (concat "  <itemref idref=\"" (plist-get s :idref)
-                 "\" linear=\"" (or (plist-get s :linear) "yes") "\"/>"))
-       spine "\n")
-      "\n</spine>\n"
-      "</package>\n"))))
-
-;;; --- Chapter Extraction via org-html ---
-
-(defun org-epub3--org-to-html ()
-  "Export current buffer to HTML fragment."
-  (let ((org-html-doctype "html5")
-        (org-html-html5-fancy t)
-        (org-html-head-include-default-style nil)
-        (org-html-head-include-scripts nil)
-        (org-html-use-infojs nil)
-        (org-html-preamble nil)
-        (org-html-postamble nil)
-        (org-html-link-home "")
-        (org-html-link-up "")
-        (org-html-validation-link nil))
-    (org-export-as 'html nil nil t '(:html-doctype "html5"))))
-
-(defun org-epub3--headline-to-xhtml (hl info)
-  "Export headline element HL to XHTML body fragment using INFO."
-  (let* ((level (org-element-property :level hl))
-         (title (org-export-data (org-element-property :title hl) info))
-         (todo (and (plist-get info :with-todo-keywords)
-                    (org-element-property :todo-keyword hl)))
-         (tags (and (plist-get info :with-tags)
-                    (org-element-property :raw-value hl)
-                    (org-element-property :tags hl))))
-    (concat
-     (format "<h%d>%s%s%s</h%d>\n"
-             level
-             (if todo (concat "<span class=\"todo-keyword\">"
-                              (org-epub3--esc todo) "</span> ") "")
-             (org-epub3--esc title)
-             (if tags
-                 (concat " "
-                         (mapconcat (lambda (tag)
-                                      (concat "<span class=\"tag\">"
-                                              (org-epub3--esc tag) "</span>"))
-                                    tags " "))
-               "")
-             level)
-     (org-export-data (org-element-property :contents hl) info))))
+(defun org-epub3--chapter-body (hl buf)
+  "Extract the raw Org text of headline HL from BUF, including sub-headlines."
+  (let ((begin (org-element-property :begin hl))
+        (end (org-element-property :end hl)))
+    (when (and begin end)
+      (with-current-buffer buf
+        (let ((raw (buffer-substring-no-properties begin end)))
+          (string-trim-right raw))))))
 
 ;;; --- Main Export ---
 
@@ -597,11 +154,10 @@ CONTENTS is nil.  INFO is the export plist."
         (org-epub3--nav-items nil)
         (org-epub3--ncx-points nil)
         (org-epub3--chapters nil)
-        (org-epub3--images nil)
         (org-epub3--has-svg nil)
         (temp-dir (make-temp-file "ox-epub3-" t)))
     (unwind-protect
-        (let* (          (info (org-export-get-environment 'epub3))
+        (let* ((info (org-export-get-environment 'epub3))
                (raw-title (plist-get info :title))
                (title (if raw-title
                           (org-epub3--to-string raw-title) "Untitled"))
@@ -680,9 +236,21 @@ CONTENTS is nil.  INFO is the export plist."
           (push (list :idref "titlepage" :linear "yes")
                 org-epub3--spine-items)
 
-          ;; Extract headlines as chapters
+          ;; Collect images from document tree, copy and register in manifest
+          (let ((raw-images (org-epub3--collect-images tree))
+                (seen nil))
+            (dolist (img-file raw-images)
+              (unless (member img-file seen)
+                (push img-file seen)
+                (when (file-exists-p img-file)
+                  (setq org-epub3--manifest-items
+                        (org-epub3--register-image
+                         img-file img org-epub3--manifest-items))))))
+
+          ;; Extract level-1 headlines as chapters
           (let ((headlines (org-element-map tree 'headline
-                             (lambda (hl) hl)))
+                             (lambda (hl)
+                               (when (= (org-element-property :level hl) 1) hl))))
                 (buf (current-buffer)))
             (dolist (hl headlines)
               (cl-incf org-epub3--chapter-counter)
@@ -692,14 +260,10 @@ CONTENTS is nil.  INFO is the export plist."
                      (ch-href (concat "EPUB/text/" ch-file))
                      (ch-title (org-epub3--to-string
                                 (org-element-property :raw-value hl)))
-                      (ch-begin (org-element-property :contents-begin hl))
-                      (ch-end (org-element-property :contents-end hl))
-                      (ch-raw (when (and ch-begin ch-end)
-                                 (with-current-buffer buf
-                                   (buffer-substring-no-properties ch-begin ch-end))))
-                      (org-epub3--has-svg nil)
-                      (ch-html (org-export-string-as
-                                (or ch-raw "") 'epub3 t
+                     (ch-raw (org-epub3--chapter-body hl buf))
+                     (org-epub3--has-svg nil)
+                     (ch-html (org-export-string-as
+                               (or ch-raw "") 'epub3 t
                                '(:html-doctype "html5"
                                  :html-preamble nil
                                  :html-postamble nil
@@ -710,10 +274,10 @@ CONTENTS is nil.  INFO is the export plist."
                                  :html-link-home ""
                                  :html-link-up ""
                                  :with-toc nil)))
-                      (ch-has-svg org-epub3--has-svg)
-                      (ch-contents (if (string-match "<body[^>]*>\\(\\(?:.\\|\n\\)*\\)</body>" ch-html)
-                                      (match-string 1 ch-html)
-                                    ch-html)))
+                     (ch-has-svg org-epub3--has-svg)
+                     (ch-contents (if (string-match "<body[^>]*>\\(\\(?:.\\|\n\\)*\\)</body>" ch-html)
+                                     (match-string 1 ch-html)
+                                   ch-html)))
                 ;; Write chapter XHTML
                 (org-epub3--write-file
                  (concat text "/" ch-file)
@@ -738,29 +302,6 @@ CONTENTS is nil.  INFO is the export plist."
                 ;; Track
                 (push (list :id ch-id :href ch-href)
                       org-epub3--chapters))))
-
-          ;; Copy images found in document
-          (org-element-map tree 'link
-            (lambda (link)
-              (when (eq (org-element-property :type link) 'file)
-                (let ((path (org-element-property :path link)))
-                  (when (and path
-                             (string-match-p "\\`\\.?\\.?/\\|^[^:]+\\.[a-z]+\\'" path)
-                             (file-exists-p path)
-                             (string-match-p
-                              "\\`\\.\\(jpg\\|jpeg\\|png\\|gif\\|svg\\|webp\\)\\'"
-                              (downcase (file-name-extension path))))
-                    (push path org-epub3--images))))))
-          ;; Deduplicate and copy images
-          (let ((seen nil))
-            (dolist (img-file (nreverse org-epub3--images))
-              (unless (member img-file seen)
-                (push img-file seen)
-                (when (file-exists-p img-file)
-                  (make-directory img t)
-                  (copy-file img-file
-                             (concat img "/" (file-name-nondirectory img-file))
-                             t)))))
 
           ;; Generate OPF, nav, NCX
           (org-epub3--generate-nav oebps info)
@@ -804,6 +345,31 @@ CONTENTS is nil.  INFO is the export plist."
     (when (file-exists-p epub-file)
       (browse-url epub-file))))
 
+;;; --- Link Transcoding ---
+
+(defun org-epub3--link (link contents info)
+  "Transcode LINK element to XHTML.
+CONTENTS is the transcoded content.  INFO is the export plist.
+Rewrites image paths to use ../images/ for EPUB structure."
+  (let ((type (org-element-property :type link))
+        (path (org-element-property :path link))
+        (alt (let ((desc (org-element-property :description link)))
+               (when desc (org-epub3--to-string desc)))))
+    (pcase type
+      ("file"
+       (if (member (downcase (file-name-extension path))
+                   '("jpg" "jpeg" "png" "gif" "svg" "webp"))
+           (let* ((fname (file-name-nondirectory path))
+                  (href (concat "../images/" fname)))
+             (concat "<img src=\"" (org-epub3--esc href) "\""
+                     (when alt
+                       (concat " alt=\"" (org-epub3--esc alt) "\""))
+                     "/>"))
+         ;; Non-image file links: use default HTML transcoder
+         (org-html-link link contents info)))
+      (_
+       (org-html-link link contents info)))))
+
 ;;; --- Backend Definition ---
 
 (org-export-define-derived-backend 'epub3 'html
@@ -819,6 +385,7 @@ CONTENTS is nil.  INFO is the export plist."
     (:epub3-page-progression "EPUB3_PAGE_PROGRESSION" nil org-epub3-page-progression))
   :translate-alist
   '((template . org-epub3--template)
+    (link . org-epub3--link)
     (latex-fragment . org-epub3--latex-fragment)
     (latex-environment . org-epub3--latex-environment))
   :filters-alist
