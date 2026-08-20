@@ -166,6 +166,7 @@ Returns updated MANIFEST."
         (temp-dir (make-temp-file "ox-epub3-" t)))
     (unwind-protect
         (let* ((info (org-export-get-environment 'epub3))
+               (htmlize-type (org-epub3--htmlize-type))
                (raw-title (plist-get info :title))
                (title (if raw-title
                           (org-epub3--to-string raw-title) "Untitled"))
@@ -306,19 +307,21 @@ Returns updated MANIFEST."
                        (ch-raw (buffer-substring-no-properties
                                 (point-min) (point-max)))
                        (org-epub3--has-svg nil)
-                       (ch-html (org-export-string-as
-                                 ch-raw 'epub3 t
-                                 '(:html-doctype "html5"
-                                   :html-preamble nil
-                                   :html-postamble nil
-                                   :html-head nil
-                                   :html-head-extra nil
-                                   :html-toc nil
-                                   :html-validation-link nil
-                                   :html-link-home ""
-                                   :html-link-up ""
-                                   :with-toc nil)))
-                       (ch-has-svg org-epub3--has-svg)
+                        (ch-html (cl-letf (((symbol-function 'warn) #'ignore))
+                                   (org-export-string-as
+                                    ch-raw 'epub3 t
+                                    `(:html-doctype "html5"
+                                      :html-preamble nil
+                                      :html-postamble nil
+                                      :html-head nil
+                                      :html-head-extra nil
+                                      :html-toc nil
+                                      :html-validation-link nil
+                                      :html-link-home ""
+                                      :html-link-up ""
+                                      :html-htmlize-output-type ,htmlize-type
+                                      :with-toc nil))))
+                        (ch-has-svg org-epub3--has-svg)
                        (ch-contents (if (string-match "<body[^>]*>\\(\\(?:.\\|\n\\)*\\)</body>" ch-html)
                                        (match-string 1 ch-html)
                                      ch-html))
@@ -352,19 +355,21 @@ Returns updated MANIFEST."
                                     (org-element-property :raw-value hl)))
                          (ch-raw (org-epub3--chapter-body hl buf))
                          (org-epub3--has-svg nil)
-                         (ch-html (org-export-string-as
-                                   (or ch-raw "") 'epub3 t
-                                   '(:html-doctype "html5"
-                                     :html-preamble nil
-                                     :html-postamble nil
-                                     :html-head nil
-                                     :html-head-extra nil
-                                     :html-toc nil
-                                     :html-validation-link nil
-                                     :html-link-home ""
-                                     :html-link-up ""
-                                     :with-toc nil)))
-                         (ch-has-svg org-epub3--has-svg)
+                          (ch-html (cl-letf (((symbol-function 'warn) #'ignore))
+                                     (org-export-string-as
+                                      (or ch-raw "") 'epub3 t
+                                      `(:html-doctype "html5"
+                                        :html-preamble nil
+                                        :html-postamble nil
+                                        :html-head nil
+                                        :html-head-extra nil
+                                        :html-toc nil
+                                        :html-validation-link nil
+                                        :html-link-home ""
+                                        :html-link-up ""
+                                        :html-htmlize-output-type ,htmlize-type
+                                        :with-toc nil))))
+                          (ch-has-svg org-epub3--has-svg)
                          (ch-contents (if (string-match "<body[^>]*>\\(\\(?:.\\|\n\\)*\\)</body>" ch-html)
                                          (match-string 1 ch-html)
                                        ch-html)))

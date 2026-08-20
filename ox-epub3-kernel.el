@@ -27,6 +27,12 @@
 (defvar org-epub3--id-map nil
   "Alist mapping (ID . CHAPTER-FILE) for internal cross-references.")
 
+(defun org-epub3--htmlize-type ()
+  "Return appropriate htmlize output type.
+Returns `'css' if htmlize.el >= 1.34 is available, nil otherwise."
+  (and (fboundp 'htmlize-region)
+       'css))
+
 ;;; --- Helpers ---
 
 (defun org-epub3--uuid ()

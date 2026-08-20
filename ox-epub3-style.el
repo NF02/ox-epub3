@@ -91,7 +91,24 @@
     "}\n"
     ".footnote-ref { font-size: 0.8em; vertical-align: super; }\n"
     ".footnote-definition { font-size: 0.9em; margin: 0.5em 0 0.5em 2em; }\n"
-    ".footnote-backref { text-decoration: none; margin-right: 0.3em; }\n"))
+    ".footnote-backref { text-decoration: none; margin-right: 0.3em; }\n"
+    ;; htmlize syntax highlighting for e-ink (bold/italic, no colors)
+    ;; Covers: emacs-lisp, c, lisp, fortran, python, cobol
+    ".org-keyword { font-weight: bold; }\n"
+    ".org-string { font-style: italic; }\n"
+    ".org-comment { font-style: italic; }\n"
+    ".org-function-name { font-weight: bold; }\n"
+    ".org-type { font-style: italic; }\n"
+    ".org-constant { font-weight: bold; }\n"
+    ".org-builtin { font-weight: bold; font-style: italic; }\n"
+    ".org-variable-name { font-style: italic; }\n"
+    ".org-negation-char { font-weight: bold; }\n"
+    ".org-preprocessor { font-weight: bold; }\n"
+    ".org-doc-string { font-style: italic; }\n"
+    ".org-decorator { font-style: italic; font-weight: bold; }\n"
+    ".org-warning { font-weight: bold; text-decoration: underline; }\n"
+    ".org-label { font-style: italic; }\n"
+    ".org-sh-quoted-exec { font-weight: bold; font-style: italic; }\n"))
 
 (provide 'ox-epub3-style)
 ;;; ox-epub3-style.el ends here
