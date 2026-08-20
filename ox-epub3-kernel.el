@@ -24,6 +24,8 @@
   "List of generated chapter plists.")
 (defvar org-epub3--images nil
   "Image files to copy into EPUB.")
+(defvar org-epub3--id-map nil
+  "Alist mapping (ID . CHAPTER-FILE) for internal cross-references.")
 
 ;;; --- Helpers ---
 

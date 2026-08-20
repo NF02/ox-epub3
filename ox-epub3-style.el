@@ -82,13 +82,16 @@
    ".math svg { display: inline; vertical-align: middle; }\n"
    ".equation { text-align: center; margin: 1em 0; }\n"
    ".equation svg { display: block; margin: 0 auto; }\n"
-   ".latex-fragment, .latex-environment {\n"
-   "  font-family: monospace;\n"
-   "  background: #f5f5f5;\n"
-   "  padding: 0.2em 0.4em;\n"
-   "  border-radius: 3px;\n"
-   "  font-style: italic;\n"
-   "}\n"))
+    ".latex-fragment, .latex-environment {\n"
+    "  font-family: monospace;\n"
+    "  background: #f5f5f5;\n"
+    "  padding: 0.2em 0.4em;\n"
+    "  border-radius: 3px;\n"
+    "  font-style: italic;\n"
+    "}\n"
+    ".footnote-ref { font-size: 0.8em; vertical-align: super; }\n"
+    ".footnote-definition { font-size: 0.9em; margin: 0.5em 0 0.5em 2em; }\n"
+    ".footnote-backref { text-decoration: none; margin-right: 0.3em; }\n"))
 
 (provide 'ox-epub3-style)
 ;;; ox-epub3-style.el ends here

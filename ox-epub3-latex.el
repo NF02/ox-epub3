@@ -17,6 +17,24 @@
   "Return non-nil if dvisvgm and latex are available in PATH."
   (and (executable-find "dvisvgm") (executable-find "latex")))
 
+(defun org-epub3--latex-to-mathml (latex-str &optional displayp)
+  "Convert LATEX-STR to MathML using pandoc.
+When DISPLAYP is non-nil, use display-math mode.
+Returns MathML string or nil on failure."
+  (let ((pandoc (executable-find "pandoc")))
+    (when pandoc
+      (with-temp-buffer
+        (insert latex-str)
+        (let ((exit-code (call-process-region
+                          (point-min) (point-max)
+                          pandoc nil t nil
+                          "-f" "latex" "-t" "mathml")))
+          (when (and (zerop exit-code) (> (buffer-size) 0))
+            (let ((mathml (string-trim (buffer-string))))
+              (if displayp
+                  (concat "<div class=\"equation\">\n" mathml "\n</div>")
+                (concat "<span class=\"math\">" mathml "</span>")))))))))
+
 (defun org-epub3--latex-to-svg (latex-str &optional displayp)
   "Convert LATEX-STR to an SVG string using dvisvgm.
 When DISPLAYP is non-nil, use display-math mode.
@@ -98,35 +116,41 @@ Returns SVG string or nil on failure."
               (delete-file (concat base ext)))))))))
 
 (defun org-epub3--latex-fragment (latex-fragment _contents _info)
-  "Transcode LATEX-FRAGMENT to inline SVG via dvisvgm.
+  "Transcode LATEX-FRAGMENT to inline SVG via dvisvgm, or MathML fallback.
 CONTENTS is nil.  INFO is the export plist."
   (let* ((latex-str (org-element-property :value latex-fragment))
-         (svg (org-epub3--latex-to-svg latex-str nil)))
-    (if svg
-        (progn
-          (setq org-epub3--has-svg t)
-          (concat "<span class=\"math\">"
-                  svg
-                  "</span>"))
+         (svg (when (org-epub3--dvisvgm-available-p)
+                (org-epub3--latex-to-svg latex-str nil))))
+    (cond
+     (svg
+      (setq org-epub3--has-svg t)
+      (concat "<span class=\"math\">"
+              svg
+              "</span>"))
+     ((org-epub3--latex-to-mathml latex-str nil))
+     (t
       (concat "<code class=\"latex-fragment\">"
               (org-epub3--esc latex-str)
-              "</code>"))))
+              "</code>")))))
 
 (defun org-epub3--latex-environment (latex-environment _contents _info)
-  "Transcode LATEX-ENVIRONMENT to SVG via dvisvgm.
+  "Transcode LATEX-ENVIRONMENT to SVG via dvisvgm, or MathML fallback.
 CONTENTS is nil.  INFO is the export plist."
   (let* ((latex-str (org-remove-indentation
                      (org-element-property :value latex-environment)))
-         (svg (org-epub3--latex-to-svg latex-str t)))
-    (if svg
-        (progn
-          (setq org-epub3--has-svg t)
-          (concat "<div class=\"equation\">\n"
-                  svg
-                  "\n</div>"))
+         (svg (when (org-epub3--dvisvgm-available-p)
+                (org-epub3--latex-to-svg latex-str t))))
+    (cond
+     (svg
+      (setq org-epub3--has-svg t)
+      (concat "<div class=\"equation\">\n"
+              svg
+              "\n</div>"))
+     ((org-epub3--latex-to-mathml latex-str t))
+     (t
       (concat "<pre class=\"latex-environment\">"
               (org-epub3--esc latex-str)
-              "</pre>"))))
+              "</pre>")))))
 
 (provide 'ox-epub3-latex)
 ;;; ox-epub3-latex.el ends here

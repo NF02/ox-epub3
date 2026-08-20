@@ -39,10 +39,29 @@
 
 ;;; --- Navigation (toc.xhtml) ---
 
+(defun org-epub3--nav-children (item toc-depth current-depth)
+  "Get nested children for ITEM up to TOC-DEPTH from CURRENT-DEPTH."
+  (when (and toc-depth (< current-depth toc-depth))
+    (let ((children (plist-get item :children)))
+      (when children
+        (concat "\n        <ol>\n"
+                (mapconcat
+                 (lambda (c)
+                   (concat "          <li><a href=\""
+                           (org-epub3--esc (plist-get c :href))
+                           "\">" (org-epub3--esc (plist-get c :label))
+                           "</a>"
+                           (or (org-epub3--nav-children c toc-depth (1+ current-depth)) "")
+                           "</li>"))
+                 children "\n")
+                "\n        </ol>")))))
+
 (defun org-epub3--generate-nav (temp-dir info)
-  "Generate toc.xhtml navigation document in TEMP-DIR using INFO."
+  "Generate toc.xhtml navigation document in TEMP-DIR using INFO.
+Supports recursive TOC up to org-epub3-toc-depth."
   (let* ((title (or (plist-get info :title) "Indice"))
          (lang (or (plist-get info :language) org-epub3-default-language))
+         (toc-depth (plist-get info :epub3-toc-depth))
          (nav-items (nreverse org-epub3--nav-items)))
     (org-epub3--write-file
      (concat temp-dir "/toc.xhtml")
@@ -55,21 +74,11 @@
        (mapconcat
         (lambda (item)
           (let ((label (plist-get item :label))
-                (href (plist-get item :href))
-                (children (plist-get item :children)))
+                (href (plist-get item :href)))
             (concat
              "      <li><a href=\"" (org-epub3--esc href) "\">"
              (org-epub3--esc label) "</a>"
-             (when children
-               (concat "\n        <ol>\n"
-                       (mapconcat
-                        (lambda (c)
-                          (concat "          <li><a href=\""
-                                  (org-epub3--esc (plist-get c :href))
-                                  "\">" (org-epub3--esc (plist-get c :label))
-                                  "</a></li>"))
-                        children "\n")
-                       "\n        </ol>"))
+             (or (org-epub3--nav-children item toc-depth 1) "")
              "</li>")))
         nav-items "\n")
        "\n    </ol>\n"
