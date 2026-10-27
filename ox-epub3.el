@@ -141,6 +141,18 @@ Returns updated MANIFEST."
 
 ;;; --- Chapter Extraction ---
 
+(defun org-epub3--fix-entities (s)
+  "Convert named HTML entities in S to characters for XHTML."
+  (when (stringp s)
+    (replace-regexp-in-string
+     "&\\([a-zA-Z][a-zA-Z0-9]*\\);"
+     (lambda (match)
+       (let ((name (match-string 1 match)))
+         (if (member name '("amp" "lt" "gt" "quot" "apos"))
+             match
+           (or (nth 6 (org-entity-get name)) match))))
+     s t t)))
+
 (defun org-epub3--chapter-body (hl buf)
   "Extract the raw Org text of headline HL from BUF, including sub-headlines."
   (let ((begin (org-element-property :begin hl))
@@ -163,6 +175,7 @@ Returns updated MANIFEST."
         (org-epub3--chapters nil)
         (org-epub3--has-svg nil)
         (org-epub3--id-map nil)
+        (org-epub3--extra-css nil)
         (temp-dir (make-temp-file "ox-epub3-" t)))
     (unwind-protect
         (let* ((info (org-export-get-environment 'epub3))
@@ -177,6 +190,12 @@ Returns updated MANIFEST."
                (email (when (and raw-email (stringp raw-email))
                         (org-epub3--to-string raw-email)))
                (cover (plist-get info :epub3-cover-image))
+               (split-level (org-epub3--to-int
+                             (plist-get info :epub3-split-level)
+                             org-epub3-split-level))
+               (toc-depth (org-epub3--to-int
+                           (plist-get info :epub3-toc-depth)
+                           org-epub3-toc-depth))
                (tree (org-element-parse-buffer))
                (oebps (concat temp-dir "/OEBPS"))
                (text (concat oebps "/EPUB/text"))
@@ -190,14 +209,25 @@ Returns updated MANIFEST."
           (org-epub3--generate-mimetype temp-dir)
           (org-epub3--generate-container temp-dir)
 
-          ;; CSS
-          (org-epub3--write-file (concat css "/style.css")
-                                 (org-epub3--default-css))
+           ;; CSS
+           (org-epub3--write-file (concat css "/style.css")
+                                  (org-epub3--default-css))
 
-          ;; Copy extra CSS
-          (dolist (f (plist-get info :epub3-style))
-            (when (file-exists-p f)
-              (copy-file f (concat css "/" (file-name-nondirectory f)) t)))
+           ;; Copy extra CSS
+           (let ((extra-css-files nil)
+                 (styles (plist-get info :epub3-style)))
+             (unless (listp styles)
+               (setq styles (list styles)))
+             (dolist (f styles)
+               (when (and f (file-exists-p f))
+                 (let ((fname (file-name-nondirectory f)))
+                   (copy-file f (concat css "/" fname) t)
+                   (push fname extra-css-files)
+                   (push (list :id (concat "css-" (replace-regexp-in-string "[^a-zA-Z0-9]" "-" fname))
+                               :href (concat "EPUB/styles/" fname)
+                               :type "text/css")
+                         org-epub3--manifest-items))))
+             (setq org-epub3--extra-css (nreverse extra-css-files)))
 
           ;; Cover
           (when (and cover (file-exists-p cover))
@@ -206,19 +236,21 @@ Returns updated MANIFEST."
               (copy-file cover (concat img "/" fname) t)
               (org-epub3--write-file
                (concat text "/cover.xhtml")
-               (org-epub3--xhtml
-                "Copertina"
-                (concat "<div class=\"cover\">\n"
-                        "  <img src=\"../images/" (org-epub3--esc fname)
-                        "\" alt=\"Copertina\"/>\n"
-                        "  <h1>" (org-epub3--esc title) "</h1>\n"
-                        (when author
-                          (concat "  <div class=\"author\">"
-                                  (org-epub3--esc author) "</div>\n"))
-                        (when email
-                          (concat "  <div class=\"email\">"
-                                  (org-epub3--esc email) "</div>\n"))
-                        "</div>\n")))
+                (org-epub3--xhtml
+                 "Copertina"
+                 (org-epub3--fix-entities
+                  (concat "<div class=\"cover\">\n"
+                          "  <img src=\"../images/" (org-epub3--esc fname)
+                          "\" alt=\"Copertina\"/>\n"
+                          "  <h1>" (org-epub3--esc title) "</h1>\n"
+                          (when author
+                            (concat "  <div class=\"author\">"
+                                    (org-epub3--esc author) "</div>\n"))
+                          (when email
+                            (concat "  <div class=\"email\">"
+                                    (org-epub3--esc email) "</div>\n"))
+                          "</div>\n"))
+               nil nil org-epub3--extra-css))
               (push (list :id "cover" :href "EPUB/text/cover.xhtml"
                           :type "application/xhtml+xml")
                     org-epub3--manifest-items)
@@ -226,19 +258,21 @@ Returns updated MANIFEST."
                     org-epub3--spine-items)))
 
           ;; Title page
-          (org-epub3--write-file
-           (concat text "/titlepage.xhtml")
-           (org-epub3--xhtml
-            title
-            (concat "<div class=\"title-page\">\n"
-                    "  <h1>" (org-epub3--esc title) "</h1>\n"
-                    (when author
-                      (concat "  <div class=\"author\">"
-                              (org-epub3--esc author) "</div>\n"))
-                    (when email
-                      (concat "  <div class=\"email\">"
-                              (org-epub3--esc email) "</div>\n"))
-                    "</div>\n")))
+           (org-epub3--write-file
+            (concat text "/titlepage.xhtml")
+            (org-epub3--xhtml
+             title
+             (org-epub3--fix-entities
+              (concat "<div class=\"title-page\">\n"
+                      "  <h1>" (org-epub3--esc title) "</h1>\n"
+                      (when author
+                        (concat "  <div class=\"author\">"
+                                (org-epub3--esc author) "</div>\n"))
+                      (when email
+                        (concat "  <div class=\"email\">"
+                                (org-epub3--esc email) "</div>\n"))
+                      "</div>\n"))
+             nil nil org-epub3--extra-css))
           (push (list :id "titlepage" :href "EPUB/text/titlepage.xhtml"
                       :type "application/xhtml+xml")
                 org-epub3--manifest-items)
@@ -249,55 +283,46 @@ Returns updated MANIFEST."
           (let ((raw-images (org-epub3--collect-images tree))
                 (seen nil))
             (dolist (img-file raw-images)
-              (unless (member img-file seen)
-                (push img-file seen)
-                (when (file-exists-p img-file)
-                  (setq org-epub3--manifest-items
-                        (org-epub3--register-image
-                         img-file img org-epub3--manifest-items))))))
+              (let ((truename (file-truename img-file)))
+                (unless (or (member truename seen)
+                            (and cover (file-exists-p cover)
+                                 (file-equal-p img-file cover)))
+                  (push truename seen)
+                  (when (file-exists-p img-file)
+                    (setq org-epub3--manifest-items
+                          (org-epub3--register-image
+                           img-file img org-epub3--manifest-items)))))))
 
           ;; First pass: collect all custom IDs and map them to chapters
-          (let ((headlines-all (org-element-map tree 'headline 'identity))
-                (split-level org-epub3-split-level))
+          (let* ((headlines-all (org-element-map tree 'headline 'identity))
+                 (chapter-headlines
+                  (cl-remove-if-not
+                   (lambda (h)
+                     (= (org-element-property :level h) split-level))
+                   headlines-all)))
             (dolist (hl headlines-all)
-              (let* ((level (org-element-property :level hl))
-                     (custom-id (org-element-property :custom-id hl)))
-                ;; Find which chapter this headline belongs to
-                (let ((parent-chapter nil))
-                  (when (>= level split-level)
-                    ;; Walk up parents to find the split-level headline
-                    (let ((cur hl))
-                      (while (and cur (not parent-chapter))
-                        (when (= (org-element-property :level cur) split-level)
-                          (setq parent-chapter
-                                (org-epub3--to-string
-                                 (org-element-property :raw-value cur))))
-                        (setq cur (org-element-property :parent cur)))))
-                  ;; Map custom ID to its chapter file
-                  (when custom-id
-                    (let* ((ch-num
-                            (or (when parent-chapter
-                                  (cl-loop for h in headlines-all
-                                           for i from 1
-                                           when (and (= (org-element-property :level h) split-level)
-                                                     (string= (org-epub3--to-string
-                                                               (org-element-property :raw-value h))
-                                                              parent-chapter))
-                                           return i))
-                                (when (= level split-level)
-                                  (cl-loop for h in headlines-all
-                                           for i from 1
-                                           when (and (= (org-element-property :level h) split-level)
-                                                     (eq h hl))
-                                           return i)))))
-                      (when ch-num
+              (let ((custom-id (or (org-element-property :custom-id hl)
+                                   (org-element-property :CUSTOM_ID hl))))
+                (when custom-id
+                  (let ((chapter-hl nil))
+                    (when (>= (org-element-property :level hl) split-level)
+                      (let ((cur hl))
+                        (while (and cur
+                                    (org-element-property :level cur)
+                                    (not chapter-hl))
+                          (when (= (org-element-property :level cur) split-level)
+                            (setq chapter-hl cur))
+                          (setq cur (org-element-property :parent cur)))))
+                    (when chapter-hl
+                      (let ((ch-num (1+
+                                     (cl-position chapter-hl chapter-headlines
+                                                  :test #'eq))))
                         (push (cons custom-id
                                     (format "ch%03d.xhtml" ch-num))
                               org-epub3--id-map))))))))
 
           ;; Extract headlines as chapters based on split-level
-          (let ((split-level org-epub3-split-level)
-                (buf (current-buffer)))
+          (let ((buf (current-buffer)))
             (if (<= split-level 0)
                 ;; Single file mode: export entire document as one chapter
                 (let* ((ch-num 1)
@@ -322,13 +347,14 @@ Returns updated MANIFEST."
                                       :html-htmlize-output-type ,htmlize-type
                                       :with-toc nil))))
                         (ch-has-svg org-epub3--has-svg)
-                       (ch-contents (if (string-match "<body[^>]*>\\(\\(?:.\\|\n\\)*\\)</body>" ch-html)
-                                       (match-string 1 ch-html)
-                                     ch-html))
+                        (ch-contents (org-epub3--fix-entities
+                                      (if (string-match "<body[^>]*>\\(\\(?:.\\|\n\\)*\\)</body>" ch-html)
+                                          (match-string 1 ch-html)
+                                        ch-html)))
                        (ch-title title))
                   (org-epub3--write-file
                    (concat text "/" ch-file)
-                   (org-epub3--xhtml ch-title ch-contents))
+                   (org-epub3--xhtml ch-title ch-contents nil nil org-epub3--extra-css))
                   (push (list :id ch-id :href ch-href
                               :type "application/xhtml+xml"
                               :props (when ch-has-svg "svg"))
@@ -370,16 +396,18 @@ Returns updated MANIFEST."
                                         :html-htmlize-output-type ,htmlize-type
                                         :with-toc nil))))
                           (ch-has-svg org-epub3--has-svg)
-                         (ch-contents (if (string-match "<body[^>]*>\\(\\(?:.\\|\n\\)*\\)</body>" ch-html)
-                                         (match-string 1 ch-html)
-                                       ch-html)))
+                          (ch-contents (org-epub3--fix-entities
+                                        (if (string-match "<body[^>]*>\\(\\(?:.\\|\n\\)*\\)</body>" ch-html)
+                                            (match-string 1 ch-html)
+                                          ch-html))))
                     ;; Write chapter XHTML
                     (org-epub3--write-file
                      (concat text "/" ch-file)
                      (org-epub3--xhtml
                       ch-title
                       (concat (format "<h1>%s</h1>\n" (org-epub3--esc ch-title))
-                              ch-contents)))
+                              ch-contents)
+                      nil nil org-epub3--extra-css))
                     ;; Manifest
                     (push (list :id ch-id :href ch-href
                                 :type "application/xhtml+xml"
@@ -388,17 +416,17 @@ Returns updated MANIFEST."
                     ;; Spine
                     (push (list :idref ch-id :linear "yes")
                           org-epub3--spine-items)
-                    ;; Nav (recursive children)
+                    ;; Nav (children under this chapter only)
                     (let ((nav-item (list :label ch-title :href ch-href)))
-                      ;; Collect sub-headlines up to toc-depth
-                      (when (and org-epub3-toc-depth (> org-epub3-toc-depth split-level))
-                        (let ((sub-headlines
-                               (org-element-map tree 'headline
-                                 (lambda (sub)
-                                   (let ((sub-level (org-element-property :level sub)))
-                                     (when (and (> sub-level split-level)
-                                                (<= sub-level org-epub3-toc-depth))
-                                       sub))))))
+                      (when (and toc-depth (> toc-depth split-level))
+                        (let ((sub-headlines nil))
+                          (org-element-map hl 'headline
+                            (lambda (sub)
+                              (let ((sub-level (org-element-property :level sub)))
+                                (when (and (> sub-level split-level)
+                                           (<= sub-level toc-depth))
+                                  (push sub sub-headlines)))))
+                          (setq sub-headlines (nreverse sub-headlines))
                           (when sub-headlines
                             (plist-put nav-item :children
                                        (mapcar
@@ -428,10 +456,12 @@ Returns updated MANIFEST."
             (when (file-exists-p epub-file)
               (delete-file epub-file))
             (let ((default-directory temp-dir))
-              (call-process zip-cmd nil nil nil
-                            "-X0" epub-file "mimetype")
-              (call-process zip-cmd nil nil nil
-                            "-Xr9" epub-file "META-INF" "OEBPS")))
+              (unless (zerop (call-process zip-cmd nil nil nil
+                                           "-X0" epub-file "mimetype"))
+                (error "ox-epub3: failed to create EPUB (zip mimetype)"))
+              (unless (zerop (call-process zip-cmd nil nil nil
+                                           "-Xr9" epub-file "META-INF" "OEBPS"))
+                (error "ox-epub3: failed to create EPUB (zip content)"))))
 
           (message "EPUB exported: %s" epub-file))
       ;; Cleanup
@@ -487,8 +517,13 @@ Rewrites image paths to use ../images/ and internal #id links to chapter files."
                      "/>"))
          ;; Non-image file links: use default HTML transcoder
          (org-html-link link contents info)))
-      ("coderef"
-       (org-html-link link contents info))
+      ("custom-id"
+       (let ((chapter (cdr (assoc path org-epub3--id-map))))
+         (if chapter
+             (concat "<a href=\""
+                     (org-epub3--esc (concat chapter "#" path)) "\">"
+                     contents "</a>")
+           (org-html-link link contents info))))
       (_
        (org-html-link link contents info)))))
 
@@ -525,9 +560,10 @@ Rewrites image paths to use ../images/ and internal #id links to chapter files."
   '((:epub3-cover-image "EPUB3_COVER_IMAGE" nil org-epub3-cover-image)
     (:epub3-style "EPUB3_STYLE" nil nil)
     (:epub3-layout "EPUB3_LAYOUT" nil org-epub3-layout)
-    (:epub3-toc-depth "EPUB3_TOC_DEPTH" nil org-epub3-toc-depth parse-int)
+    (:epub3-toc-depth "EPUB3_TOC_DEPTH" nil org-epub3-toc-depth string-to-number)
     (:epub3-page-progression "EPUB3_PAGE_PROGRESSION" nil org-epub3-page-progression)
-    (:epub3-split-level "EPUB3_SPLIT_LEVEL" nil org-epub3-split-level parse-int))
+    (:epub3-accessibility-summary "EPUB3_ACCESSIBILITY_SUMMARY" nil org-epub3-accessibility-summary)
+    (:epub3-split-level "EPUB3_SPLIT_LEVEL" nil org-epub3-split-level string-to-number))
   :translate-alist
   '((template . org-epub3--template)
     (link . org-epub3--link)

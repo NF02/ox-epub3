@@ -10,10 +10,12 @@
 
 ;;; --- XHTML Wrapper ---
 
-(defun org-epub3--xhtml (title body &optional lang css-path)
-  "Wrap BODY in XHTML5 document with TITLE, LANG and CSS-PATH."
+(defun org-epub3--xhtml (title body &optional lang css-path extra-css)
+  "Wrap BODY in XHTML5 document with TITLE, LANG and CSS-PATH.
+EXTRA-CSS is a list of additional CSS filenames in styles/."
   (let ((lang (or lang org-epub3-default-language))
-        (css-path (or css-path "../styles/style.css")))
+        (css-path (or css-path "../styles/style.css"))
+        (extra-css (or extra-css nil)))
     (concat
      "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n"
      "<!DOCTYPE html>\n"
@@ -22,7 +24,12 @@
      "      xml:lang=\"" (org-epub3--esc lang) "\">\n"
      "<head>\n"
      "  <title>" (org-epub3--esc (or title "")) "</title>\n"
+     "  <meta name=\"viewport\" content=\"width=1200, height=1600\"/>\n"
      "  <link rel=\"stylesheet\" type=\"text/css\" href=\"" css-path "\"/>\n"
+     (mapconcat (lambda (f)
+                  (concat "  <link rel=\"stylesheet\" type=\"text/css\" href=\"../styles/"
+                          (org-epub3--esc f) "\"/>\n"))
+                extra-css "")
      "</head>\n"
      "<body>\n"
      body
@@ -63,7 +70,7 @@
    "  word-wrap: break-word;\n"
    "}\n"
    "code { padding: 0.1em 0.3em; border-radius: 2px; }\n"
-   "table { border-collapse: collapse; width: 100%%; margin: 1em 0; }\n"
+   "table { border-collapse: collapse; width: 100%; margin: 1em 0; }\n"
    "th, td { border: 1px solid #ddd; padding: 0.5em; text-align: left; }\n"
    "th { background: #f0f0f0; font-weight: bold; }\n"
    "ul, ol { margin: 0.8em 0; padding-left: 2em; }\n"

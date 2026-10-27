@@ -61,7 +61,9 @@
 Supports recursive TOC up to org-epub3-toc-depth."
   (let* ((title (or (plist-get info :title) "Indice"))
          (lang (or (plist-get info :language) org-epub3-default-language))
-         (toc-depth (plist-get info :epub3-toc-depth))
+         (toc-depth (org-epub3--to-int
+                     (plist-get info :epub3-toc-depth)
+                     org-epub3-toc-depth))
          (nav-items (nreverse org-epub3--nav-items)))
     (org-epub3--write-file
      (concat temp-dir "/toc.xhtml")
@@ -90,6 +92,9 @@ Supports recursive TOC up to org-epub3-toc-depth."
 (defun org-epub3--generate-ncx (temp-dir info)
   "Generate toc.ncx in TEMP-DIR using INFO."
   (let ((title (or (plist-get info :title) ""))
+        (toc-depth (org-epub3--to-int
+                    (plist-get info :epub3-toc-depth)
+                    org-epub3-toc-depth))
         (points (nreverse org-epub3--ncx-points)))
     (org-epub3--write-file
      (concat temp-dir "/toc.ncx")
@@ -101,7 +106,7 @@ Supports recursive TOC up to org-epub3-toc-depth."
              "  <meta name=\"dtb:uid\" content=\""
              (org-epub3--esc org-epub3--uuid) "\"/>\n"
              "  <meta name=\"dtb:depth\" content=\""
-             (number-to-string org-epub3-toc-depth) "\"/>\n"
+             (number-to-string toc-depth) "\"/>\n"
              "  <meta name=\"dtb:totalPageCount\" content=\"0\"/>\n"
              "  <meta name=\"dtb:maxPageNumber\" content=\"0\"/>\n"
              "</head>\n"
@@ -133,6 +138,11 @@ Supports recursive TOC up to org-epub3-toc-depth."
                    (format-time-string "%Y-%m-%d" (current-time) t)))
          (description (plist-get info :description))
          (cover (plist-get info :epub3-cover-image))
+         (layout (or (plist-get info :epub3-layout) org-epub3-layout))
+         (page-progression (or (plist-get info :epub3-page-progression)
+                               org-epub3-page-progression))
+         (accessibility-summary (or (plist-get info :epub3-accessibility-summary)
+                                    org-epub3-accessibility-summary))
          (manifest (nreverse org-epub3--manifest-items))
          (spine (nreverse org-epub3--spine-items)))
     (org-epub3--write-file
@@ -165,9 +175,9 @@ Supports recursive TOC up to org-epub3-toc-depth."
       "  <meta property=\"schema:accessFeature\">readingOrder</meta>\n"
       "  <meta property=\"schema:accessHazard\">none</meta>\n"
       "  <meta property=\"schema:accessibilitySummary\">"
-      (org-epub3--esc org-epub3-accessibility-summary) "</meta>\n"
+      (org-epub3--esc accessibility-summary) "</meta>\n"
       "  <meta property=\"rendition:layout\">"
-      (org-epub3--esc org-epub3-layout) "</meta>\n"
+      (org-epub3--esc layout) "</meta>\n"
       "</metadata>\n\n"
       "<manifest>\n"
       "  <item id=\"nav\" href=\"toc.xhtml\" media-type=\"application/xhtml+xml\" properties=\"nav\"/>\n"
@@ -195,7 +205,7 @@ Supports recursive TOC up to org-epub3-toc-depth."
       "<spine"
       (when org-epub3-use-ncx " toc=\"ncx\"")
       (concat " page-progression-direction=\""
-              (org-epub3--esc org-epub3-page-progression) "\"")
+              (org-epub3--esc page-progression) "\"")
       ">\n"
       (mapconcat
        (lambda (s)

@@ -55,8 +55,20 @@ Returns `'css' if htmlize.el >= 1.34 is available, nil otherwise."
    ((symbolp data) (symbol-name data))
    ((numberp data) (number-to-string data))
    ((null data) "")
-   ((listp data) (org-epub3--to-string (car data)))
+   ((listp data) (mapconcat #'org-epub3--to-string data ""))
    (t (substring-no-properties (format "%s" data)))))
+
+(defun org-epub3--to-int (value &optional default)
+  "Coerce VALUE to an integer, returning DEFAULT on failure."
+  (cond
+   ((integerp value) value)
+   ((numberp value) (truncate value))
+   ((stringp value)
+    (let ((s (string-trim value)))
+      (if (string-match-p "\\`-?[0-9]+\\'" s)
+          (string-to-number s)
+        default)))
+   (t default)))
 
 (defun org-epub3--esc (text)
   "Escape TEXT for XML."
